@@ -222,10 +222,31 @@ def notify(token: str, chat_id: str, item: dict) -> None:
         f"{item['title']}{price}\n\n"
         f"<a href=\"{item['url']}\">Abrir anuncio</a>"
     )
+    if item.get("image"):
+        try:
+            telegram(
+                "sendPhoto",
+                token,
+                {
+                    "chat_id": chat_id,
+                    "photo": item["image"],
+                    "caption": text,
+                    "parse_mode": "HTML",
+                },
+            )
+            time.sleep(0.15)
+            return
+        except Exception as exc:
+            print(f"No se pudo enviar la miniatura de {item['id']}: {exc}", file=sys.stderr)
     telegram(
         "sendMessage",
         token,
-        {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": "false"},
+        {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": "false",
+        },
     )
     time.sleep(0.15)
 
