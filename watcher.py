@@ -26,10 +26,17 @@ def normalize(value: str) -> str:
 
 
 def relevant(title: str) -> bool:
+    """Accept PS1 games even when the seller omits words such as juego/lote."""
     text = normalize(title)
-    ps1_terms = ("ps1", "playstation 1", "play station 1", "ps one", "psx")
-    game_terms = ("juego", "juegos", "lote", "pack", "coleccion")
-    return any(term in text for term in ps1_terms) and any(term in text for term in game_terms)
+    ps1_terms = (
+        "ps1",
+        "playstation 1",
+        "play station 1",
+        "ps one",
+        "psx",
+        "playstation platinum",
+    )
+    return any(term in text for term in ps1_terms)
 
 
 def title_from_url(url: str) -> str:
@@ -46,9 +53,20 @@ def scrape_page(page, source: str, url: str) -> list[dict]:
         page.wait_for_load_state("networkidle", timeout=20_000)
     except PlaywrightTimeoutError:
         pass
-    page.wait_for_timeout(4_000)
+    selector = 'a[href*="/items/"]' if source == "Vinted" else 'article a[href*="/item/"]'
+    try:
+        page.locator(selector).first.wait_for(state="attached", timeout=30_000)
+    except PlaywrightTimeoutError:
+        # Wallapop sometimes leaves its loading skeleton visible on the first
+        # request. A reload is enough when this is a transient response.
+        if source == "Wallapop":
+            print("Wallapop sigue cargando; reintentando una vez...")
+            page.reload(wait_until="domcontentloaded", timeout=60_000)
+            page.locator(selector).first.wait_for(state="attached", timeout=30_000)
+        else:
+            raise
+    page.wait_for_timeout(2_000)
 
-    selector = 'a[href*="/items/"]' if source == "Vinted" else 'a[href*="/item/"]'
     raw = page.locator(selector).evaluate_all(
         r"""(links) => links.map(a => {
           let box = a;
@@ -79,9 +97,8 @@ def scrape_page(page, source: str, url: str) -> list[dict]:
         item_id = f"{source.lower()}:{match.group(1)}"
         text_lines = [line.strip() for line in row["text"].splitlines() if line.strip()]
         title = row["alt"].strip() or (text_lines[0] if text_lines else title_from_url(row["href"]))
-        # The search itself is broad enough to catch useful variants. This extra
-        # filter rejects unrelated promoted products when their title is available.
-        if title and not relevant(title) and source == "Wallapop":
+        # Both shops mix unrelated promoted products into their search results.
+        if title and not relevant(title):
             continue
         results[item_id] = {
             "id": item_id,
@@ -160,14 +177,7 @@ def main() -> int:
     errors = []
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context(
-            locale="es-ES",
-            timezone_id="Europe/Madrid",
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
-            ),
-        )
+        context = browser.new_context(locale="es-ES", timezone_id="Europe/Madrid")
         for source, url in SOURCES.items():
             page = context.new_page()
             try:
@@ -191,9 +201,26 @@ def main() -> int:
             },
         )
     else:
-        new_items = [item for item in items if item["id"] not in seen]
+        active_sources = {item["source"].lower() for item in items}
+        known_sources = {item_id.split(":", 1)[0] for item_id in seen}
+        newly_activated = active_sources - known_sources
+        new_items = [
+            item
+            for item in items
+            if item["id"] not in seen and item["source"].lower() not in newly_activated
+        ]
         for item in reversed(new_items[:20]):
             notify(token, chat_id, item)
+        for source in sorted(newly_activated):
+            count = sum(item["source"].lower() == source for item in items)
+            telegram(
+                "sendMessage",
+                token,
+                {
+                    "chat_id": chat_id,
+                    "text": f"✅ {source.title()} activado. He registrado {count} anuncios actuales; te avisaré de los nuevos.",
+                },
+            )
         save_state(True, seen | current_ids)
         print(f"Nuevos anuncios notificados: {len(new_items[:20])}")
 
