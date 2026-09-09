@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import unicodedata
+import uuid
 from pathlib import Path
 from urllib.parse import unquote, urljoin, urlparse
 
@@ -112,6 +113,71 @@ def scrape_page(page, source: str, url: str) -> list[dict]:
     return list(results.values())
 
 
+def scrape_wallapop() -> list[dict]:
+    """Use the same public search endpoint as Wallapop's current web client."""
+    print("Consultando Wallapop...")
+    device_id = str(uuid.uuid4())
+    response = requests.get(
+        "https://api.wallapop.com/api/v3/search/section",
+        params={
+            "keywords": SEARCH_TERM,
+            "order_by": "newest",
+            "section_type": "organic_search_results",
+            "source": "search_box",
+            "latitude": "40.4168",
+            "longitude": "-3.7038",
+        },
+        headers={
+            "Accept": "application/json",
+            "Accept-Language": "es-ES,es;q=0.9",
+            "Origin": "https://es.wallapop.com",
+            "Referer": "https://es.wallapop.com/",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152 Safari/537.36"
+            ),
+            "deviceos": "0",
+            "x-deviceos": "0",
+            "x-deviceid": device_id,
+            "x-appversion": "827040",
+        },
+        timeout=40,
+    )
+    response.raise_for_status()
+    rows = response.json().get("data", {}).get("section", {}).get("items", [])
+    results = []
+    for row in rows:
+        title = str(row.get("title", "")).strip()
+        if not relevant(title):
+            continue
+        price_data = row.get("price") or {}
+        amount = price_data.get("amount")
+        if isinstance(amount, (int, float)):
+            formatted = f"{amount:g}".replace(".", ",") + " €"
+        else:
+            formatted = ""
+        images = row.get("images") or []
+        image = ""
+        if images:
+            image = (images[0].get("urls") or {}).get("small", "")
+        slug = str(row.get("web_slug", "")).strip()
+        item_id = str(row.get("id", "")).strip()
+        if not item_id or not slug:
+            continue
+        results.append(
+            {
+                "id": f"wallapop:{item_id}",
+                "source": "Wallapop",
+                "title": title[:180],
+                "price": formatted,
+                "url": f"https://es.wallapop.com/item/{slug}",
+                "image": image,
+            }
+        )
+    print(f"Wallapop: {len(results)} anuncios de PS1 encontrados")
+    return results
+
+
 def load_state() -> dict:
     if not STATE_PATH.exists():
         return {"initialized": False, "seen": []}
@@ -179,6 +245,13 @@ def main() -> int:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(locale="es-ES", timezone_id="Europe/Madrid")
         for source, url in SOURCES.items():
+            if source == "Wallapop":
+                try:
+                    items.extend(scrape_wallapop())
+                except Exception as exc:
+                    errors.append(f"{source}: {exc}")
+                    print(errors[-1], file=sys.stderr)
+                continue
             page = context.new_page()
             try:
                 items.extend(scrape_page(page, source, url))
@@ -224,9 +297,9 @@ def main() -> int:
         save_state(True, seen | current_ids)
         print(f"Nuevos anuncios notificados: {len(new_items[:20])}")
 
-    # A temporary failure in one shop should not discard successful results from
-    # the other, but failing both makes the workflow visibly fail.
-    if len(errors) == len(SOURCES):
+    # Results from the working shop are still saved, but any failed source makes
+    # the workflow visibly fail so a silent outage cannot go unnoticed again.
+    if errors:
         return 1
     return 0
 
