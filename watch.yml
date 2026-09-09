@@ -1,0 +1,48 @@
+name: Vigilar juegos PS1
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "7,37 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ps1-watcher
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Descargar proyecto
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Buscar anuncios nuevos
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python watcher.py
+
+      - name: Guardar anuncios ya revisados
+        run: |
+          if git diff --quiet -- state.json; then exit 0; fi
+          git config user.name "ps1-watcher[bot]"
+          git config user.email "ps1-watcher[bot]@users.noreply.github.com"
+          git add state.json
+          git commit -m "Actualizar anuncios revisados"
+          git push
+
