@@ -40,6 +40,65 @@ def relevant(title: str) -> bool:
     return any(term in text for term in ps1_terms)
 
 
+def acceptable_listing(text: str) -> bool:
+    """Keep PS1 games while rejecting obvious foreign editions and accessories."""
+    value = normalize(text)
+    if not relevant(value):
+        return False
+
+    foreign_patterns = (
+        r"\bfrancais(?:e)?\b",
+        r"\bfrances(?:a)?\b",
+        r"\bfrench\b",
+        r"\bfrance\b",
+        r"\bpal\s*fr\b",
+        r"\bversion\s*fr\b",
+        r"\bjeu(?:x)?\b",
+        r"\bntsc(?:-j)?\b",
+        r"\bjapon(?:es|esa)?\b",
+        r"\bjapan(?:ese)?\b",
+        r"\bjapponese\b",
+        r"\bitalian(?:o|a)?\b",
+        r"\bitalien\b",
+        r"\bgioc(?:o|hi)\b",
+        r"\baleman(?:a)?\b",
+        r"\ballemand\b",
+        r"\bdeutsch\b",
+        r"\bgerman\b",
+        r"\bingles(?:a)?\b",
+        r"\benglish\b",
+        r"\bpal\s*uk\b",
+        r"\bversion\s*uk\b",
+        r"\bportugues(?:a)?\b",
+        r"\bportuguese\b",
+    )
+    if any(re.search(pattern, value) for pattern in foreign_patterns):
+        return False
+
+    game_terms = ("juego", "juegos", "lote", "pack", "coleccion", "titulo", "titulos")
+    accessory_patterns = (
+        r"\bconsola\b",
+        r"\bmando(?:s)?\b",
+        r"\bcable(?:s)?\b",
+        r"\bmemory\s*card\b",
+        r"\btarjeta\s+de\s+memoria\b",
+        r"\bmanual\b",
+        r"\bcaja\s+vacia\b",
+        r"\bcaratula\b",
+        r"\breproduccion\b",
+        r"\brepro\b",
+        r"\breplica\b",
+        r"\bsoporte\b",
+        r"\badaptador\b",
+        r"\bpegatina(?:s)?\b",
+        r"\bposter\b",
+        r"\bfigura(?:s)?\b",
+        r"\bguia\b",
+    )
+    is_accessory = any(re.search(pattern, value) for pattern in accessory_patterns)
+    return not is_accessory or any(term in value for term in game_terms)
+
+
 def title_from_url(url: str) -> str:
     slug = unquote(urlparse(url).path.rstrip("/").split("/")[-1])
     slug = re.sub(r"^\d+-", "", slug)
@@ -99,7 +158,8 @@ def scrape_page(page, source: str, url: str) -> list[dict]:
         text_lines = [line.strip() for line in row["text"].splitlines() if line.strip()]
         title = row["alt"].strip() or (text_lines[0] if text_lines else title_from_url(row["href"]))
         # Both shops mix unrelated promoted products into their search results.
-        if title and not relevant(title):
+        searchable_text = f"{title} {row['text']}"
+        if title and not acceptable_listing(searchable_text):
             continue
         results[item_id] = {
             "id": item_id,
@@ -148,7 +208,8 @@ def scrape_wallapop() -> list[dict]:
     results = []
     for row in rows:
         title = str(row.get("title", "")).strip()
-        if not relevant(title):
+        searchable_text = f"{title} {row.get('description', '')}"
+        if not acceptable_listing(searchable_text):
             continue
         price_data = row.get("price") or {}
         amount = price_data.get("amount")
@@ -303,8 +364,14 @@ def main() -> int:
             for item in items
             if item["id"] not in seen and item["source"].lower() not in newly_activated
         ]
-        for item in reversed(new_items[:20]):
-            notify(token, chat_id, item)
+        notified = 0
+        for source in SOURCES:
+            source_items = [item for item in new_items if item["source"] == source]
+            # Each shop gets its own quota, so a noisy Vinted run can never
+            # prevent Wallapop alerts from reaching Telegram.
+            for item in reversed(source_items[:15]):
+                notify(token, chat_id, item)
+                notified += 1
         for source in sorted(newly_activated):
             count = sum(item["source"].lower() == source for item in items)
             telegram(
@@ -316,7 +383,7 @@ def main() -> int:
                 },
             )
         save_state(True, seen | current_ids)
-        print(f"Nuevos anuncios notificados: {len(new_items[:20])}")
+        print(f"Nuevos anuncios notificados: {notified}")
 
     # Results from the working shop are still saved, but any failed source makes
     # the workflow visibly fail so a silent outage cannot go unnoticed again.
