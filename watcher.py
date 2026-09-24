@@ -15,6 +15,27 @@ from playwright.sync_api import sync_playwright
 
 STATE_PATH = Path("state.json")
 SEARCH_TERM = "juegos ps1"
+TARGET_GAME_PATTERNS = (
+    r"\brival(?:s)?\s+schools?\b",
+    r"\bfuture\s+cop(?:\s*:\s*|\s+)l\.?a\.?p\.?d\.?\b",
+    r"\bbloody\s+roar\b",
+    r"\bcarmageddon\b",
+    r"\bcrash\s+bandicoot\b",
+    r"\bcrash\s+bash\b",
+    r"\bcrash\s+team\s+racing\b",
+    r"\bdino\s+crisis\s*(?:2|ii)\b",
+    r"\bfighting\s+force\b",
+    r"\bfinal\s+fantasy\s*(?:6|vi)\b",
+    r"\blemmings\b",
+    r"\boddworld\b",
+    r"\bresident\s+evil\b",
+    r"\bsilent\s+hill\b",
+    r"\btekken\s*3\b",
+    r"\btheme\s+hospital\b",
+    r"\bv[\s-]*rally\b",
+    r"\bmarranos\s+en\s+guerra\b",
+    r"\bworms\b",
+)
 SOURCES = {
     "Vinted": "https://www.vinted.es/catalog?search_text=juegos%20ps1&order=newest_first",
     "Wallapop": "https://es.wallapop.com/app/search?keywords=juegos%20ps1&order_by=newest",
@@ -27,17 +48,9 @@ def normalize(value: str) -> str:
 
 
 def relevant(title: str) -> bool:
-    """Accept PS1 games even when the seller omits words such as juego/lote."""
+    """Accept only the PS1 games selected by the user."""
     text = normalize(title)
-    ps1_terms = (
-        "ps1",
-        "playstation 1",
-        "play station 1",
-        "ps one",
-        "psx",
-        "playstation platinum",
-    )
-    return any(term in text for term in ps1_terms)
+    return any(re.search(pattern, text) for pattern in TARGET_GAME_PATTERNS)
 
 
 def acceptable_listing(text: str) -> bool:
@@ -46,21 +59,50 @@ def acceptable_listing(text: str) -> bool:
     if not relevant(value):
         return False
 
+    wrong_platform_patterns = (
+        r"\bps\s*[2345]\b",
+        r"\bplaystation\s*[2345]\b",
+        r"\bxbox\b",
+        r"\bgame\s*cube\b",
+        r"\bdreamcast\b",
+        r"\bnintendo\s*(?:ds|3ds|switch|wii)\b",
+        r"\bpc\s*(?:cd-rom|dvd-rom|game|juego)\b",
+    )
+    if any(re.search(pattern, value) for pattern in wrong_platform_patterns):
+        return False
+
     foreign_patterns = (
         r"\bfrancais(?:e)?\b",
         r"\bfrances(?:a)?\b",
         r"\bfrench\b",
         r"\bfrance\b",
+        r"\bcomplet(?:e|es|s)?\b",
+        r"\bbon(?:ne)?\s+etat\b",
+        r"\btres\s+bon(?:ne)?\b",
+        r"\bsans\b",
+        r"\bavec\b",
+        r"\bboite\b",
+        r"\bnotice\b",
+        r"\bdisque(?:s)?\b",
+        r"\bpour\b",
+        r"\bofficiel(?:le)?\b",
+        r"\blot\s+de\b",
+        r"\bfonctionne\b",
+        r"\brayure(?:s)?\b",
         r"\bpal\s*fr\b",
         r"\bversion\s*fr\b",
         r"\bjeu(?:x)?\b",
         r"\bntsc(?:-j)?\b",
+        r"\bjap\b",
         r"\bjapon(?:es|esa)?\b",
         r"\bjapan(?:ese)?\b",
         r"\bjapponese\b",
+        r"\blotto\b",
         r"\bitalian(?:o|a)?\b",
         r"\bitalien\b",
         r"\bgioc(?:o|hi)\b",
+        r"\boriginale\b",
+        r"\bprima\s+stampa\b",
         r"\baleman(?:a)?\b",
         r"\ballemand\b",
         r"\bdeutsch\b",
@@ -69,8 +111,13 @@ def acceptable_listing(text: str) -> bool:
         r"\benglish\b",
         r"\bpal\s*uk\b",
         r"\bversion\s*uk\b",
+        r"\bportugal\b",
         r"\bportugues(?:a)?\b",
         r"\bportuguese\b",
+        r"\bjogo(?:s)?\b",
+        r"\bvoor\b",
+        r"\binclusief\b",
+        r"\bnederlands\b",
     )
     if any(re.search(pattern, value) for pattern in foreign_patterns):
         return False
@@ -97,6 +144,77 @@ def acceptable_listing(text: str) -> bool:
     )
     is_accessory = any(re.search(pattern, value) for pattern in accessory_patterns)
     return not is_accessory or any(term in value for term in game_terms)
+
+
+def clearly_spanish_listing(text: str) -> bool:
+    """Require positive evidence that an ambiguous Vinted advert is Spanish."""
+    value = normalize(text)
+    strong_patterns = (
+        r"\bespana\b",
+        r"\bespanol(?:a|es|as)?\b",
+        r"\bcastellano\b",
+        r"\bpal\s*(?:es|esp)\b",
+        r"\bversion\s*(?:es|esp|espanola)\b",
+        r"\bedicion\s+espanola\b",
+    )
+    if any(re.search(pattern, value) for pattern in strong_patterns):
+        return True
+
+    # When the seller does not name the edition, accept only descriptions
+    # containing several natural Spanish expressions. One isolated word is
+    # not enough because it can also appear in Italian or Portuguese adverts.
+    spanish_patterns = (
+        r"\bvideojuego(?:s)?\b",
+        r"\bjuego(?:s)?\b",
+        r"\bvendo\b",
+        r"\bfunciona(?:ndo)?\b",
+        r"\bprobad[oa]\b",
+        r"\bbuen\s+estado\b",
+        r"\bmuy\s+buen\s+estado\b",
+        r"\bincluye\b",
+        r"\bcaja\b",
+        r"\bcaratula(?:s)?\b",
+        r"\bmanual(?:es)?\s+de\s+instrucciones\b",
+        r"\bpara\s+playstation\b",
+        r"\bsin\s+manual\b",
+        r"\bcon\s+manual\b",
+    )
+    return sum(bool(re.search(pattern, value)) for pattern in spanish_patterns) >= 2
+
+
+def filter_new_vinted_items(
+    context, items: list[dict], seen: set[str]
+) -> tuple[list[dict], set[str]]:
+    """Inspect only unseen Vinted adverts and discard non-Spanish editions."""
+    filtered = []
+    rejected_ids = set()
+    for item in items:
+        if item["source"] != "Vinted" or item["id"] in seen:
+            filtered.append(item)
+            continue
+
+        page = context.new_page()
+        try:
+            page.goto(item["url"], wait_until="domcontentloaded", timeout=45_000)
+            description = page.locator('[itemprop="description"]').first
+            description.wait_for(state="attached", timeout=12_000)
+            detail_text = description.inner_text(timeout=5_000)
+            searchable_text = f"{item['title']} {detail_text}"
+            if acceptable_listing(searchable_text) and clearly_spanish_listing(searchable_text):
+                filtered.append(item)
+            else:
+                rejected_ids.add(item["id"])
+                print(f"Vinted descartado por idioma: {item['title']}")
+        except Exception as exc:
+            # Do not mark it as seen: a transient loading error will be retried
+            # during the following scheduled execution.
+            print(
+                f"Vinted no pudo comprobar el idioma de {item['id']}: {exc}",
+                file=sys.stderr,
+            )
+        finally:
+            page.close()
+    return filtered, rejected_ids
 
 
 def title_from_url(url: str) -> str:
@@ -323,6 +441,7 @@ def main() -> int:
 
     items = []
     errors = []
+    rejected_ids = set()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context(locale="es-ES", timezone_id="Europe/Madrid")
@@ -342,9 +461,11 @@ def main() -> int:
                 print(errors[-1], file=sys.stderr)
             finally:
                 page.close()
+        if state.get("initialized"):
+            items, rejected_ids = filter_new_vinted_items(context, items, seen)
         browser.close()
 
-    current_ids = {item["id"] for item in items}
+    current_ids = {item["id"] for item in items} | rejected_ids
     if not state.get("initialized"):
         save_state(True, seen | current_ids)
         telegram(
